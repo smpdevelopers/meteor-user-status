@@ -87,12 +87,13 @@ Meteor.startup ->
   Local session modifification functions - also used in testing
 ###
 
-addSession = (userId, connectionId, timestamp, ipAddr) ->
+addSession = (userId, connectionId, timestamp, ipAddr, device) ->
   UserConnections.upsert connectionId,
     $set: {
       userId: userId
       ipAddr: ipAddr
       loginTime: timestamp
+      device: device
     }
 
   statusEvents.emit "connectionLogin",
@@ -140,6 +141,113 @@ activeSession = (userId, connectionId, timestamp) ->
     lastActivity: timestamp
   return
 
+###
+   Connected device detection
+###
+
+detectDevice = (userAgent) ->
+  userAgent = userAgent.toLowerCase()
+
+  deviceTypes = [
+    "tv"
+    "tablet"
+    "mobile"
+    "desktop"
+  ]
+
+  device =
+    type: ""
+    model: ""
+
+  test = (regex) -> regex.test(userAgent)
+  exec = (regex) -> regex.exec(userAgent)
+
+  if test(/googletv|smarttv|internet.tv|netcast|nettv|appletv|boxee|kylo|roku|dlnadoc|ce\-html/)
+    # Check if user agent is a smart tv
+    device.type = deviceTypes[0]
+    device.model = "smartTv"
+
+  else if test(/xbox|playstation.3|wii/)
+    # Check if user agent is a game console
+    device.type = deviceTypes[0]
+    device.model = "gameConsole"
+
+  else if test(/ip(a|ro)d/)
+    # Check if user agent is a iPad
+    device.type = deviceTypes[1]
+    device.model = "ipad"
+
+  else if (test(/tablet/) and not test(/rx-34/)) or test(/folio/)
+    # Check if user agent is a Tablet
+    device.type = deviceTypes[1]
+    device.model = String(exec(/playbook/) or "")
+
+  else if test(/linux/) and test(/android/) and not test(/fennec|mobi|htc.magic|htcX06ht|nexus.one|sc-02b|fone.945/)
+    # Check if user agent is an Android Tablet
+    device.type = deviceTypes[1]
+    device.model = "android"
+
+  else if test(/kindle/) or (test(/mac.os/) and test(/silk/))
+    # Check if user agent is a Kindle or Kindle Fire
+    device.type = deviceTypes[1]
+    device.model = "kindle"
+
+  else if test(/gt-p10|sc-01c|shw-m180s|sgh-t849|sch-i800|shw-m180l|sph-p100|sgh-i987|zt180|htc(.flyer|\_flyer)|sprint.atp51|viewpad7|pandigital(sprnova|nova)|ideos.s7|dell.streak.7|advent.vega|a101it|a70bht|mid7015|next2|nook/) or (test(/mb511/) and test(/rutem/))
+    # Check if user agent is a pre Android 3.0 Tablet
+    device.type = deviceTypes[1]
+    device.model = "android"
+
+  else if test(/bb10/)
+    # Check if user agent is a BB10 device
+    device.type = deviceTypes[1]
+    device.model = "blackberry"
+
+  else
+    # Check if user agent is one of common mobile types
+    device.model = exec(/iphone|ipod|android|blackberry|opera mini|opera mobi|skyfire|maemo|windows phone|palm|iemobile|symbian|symbianos|fennec|j2me/);
+
+    if device.model isnt null
+      device.type = deviceTypes[2]
+      device.model = String(device.model)
+    else
+      device.model = ""
+
+      if test(/bolt|fennec|iris|maemo|minimo|mobi|mowser|netfront|novarra|prism|rx-34|skyfire|tear|xv6875|xv6975|google.wireless.transcoder/)
+        # Check if user agent is unique Mobile User Agent
+        device.type = deviceTypes[2]
+
+      else if test(/opera/) and test(/windows.nt.5/) and test(/htc|xda|mini|vario|samsung\-gt\-i8000|samsung\-sgh\-i9/)
+        # Check if user agent is an odd Opera User Agent - http://goo.gl/nK90K
+        device.type = deviceTypes[2]
+
+      else if (test(/windows.(nt|xp|me|9)/) and not test(/phone/)) or test(/win(9|.9|nt)/) or test(/\(windows 8\)/)
+        # Check if user agent is Windows Desktop, "(Windows 8)" Chrome extra exception
+        device.type = deviceTypes[3]
+
+      else if test(/macintosh|powerpc/) and not test(/silk/)
+        # Check if agent is Mac Desktop
+        device.type = deviceTypes[3]
+        device.model = "mac";
+
+      else if test(/linux/) and test(/x11/)
+        # Check if user agent is a Linux Desktop
+        device.type = deviceTypes[3]
+
+      else if test(/solaris|sunos|bsd/)
+        # Check if user agent is a Solaris, SunOS, BSD Desktop
+        device.type = deviceTypes[3]
+
+      else if test(/bot|crawler|spider|yahoo|ia_archiver|covario-ids|findlinks|dataparksearch|larbin|mediapartners-google|ng-search|snappy|teoma|jeeves|tineye/) and not test(/mobile/)
+        # Check if user agent is a Desktop BOT/Crawler/Spider
+        device.type = deviceTypes[3]
+        device.model = "crawler"
+
+      else
+        # Otherwise assume it is a Mobile Device
+        device.type = deviceTypes[2]
+
+  return device
+
 # pub/sub trick as referenced in http://stackoverflow.com/q/10257958/586086
 # TODO: replace this with Meteor.onConnection and login hooks.
 
@@ -150,6 +258,7 @@ Meteor.publish null, ->
 
   connection = @_session.connectionHandle
   connectionId = @_session.id # same as connection.id
+  device = detectDevice(@connection.httpHeaders['user-agent']);
 
   # Untrack connection on logout
   unless userId?
@@ -161,7 +270,7 @@ Meteor.publish null, ->
     return
 
   # Add socket to open connections
-  addSession(userId, connectionId, timestamp, connection.clientAddress)
+  addSession(userId, connectionId, timestamp, connection.clientAddress, device)
 
   # Remove socket on close
   @_session.socket.on "close", Meteor.bindEnvironment ->
