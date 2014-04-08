@@ -258,7 +258,13 @@ Meteor.publish null, ->
 
   connection = @_session.connectionHandle
   connectionId = @_session.id # same as connection.id
-  device = detectDevice(@connection.httpHeaders['user-agent']);
+
+  userAgent = @connection.httpHeaders['user-agent']
+
+  if (userAgent?)
+    device = detectDevice(userAgent);
+  else
+    device = {type: 'unknown', model: 'unknown'}
 
   # Untrack connection on logout
   unless userId?
